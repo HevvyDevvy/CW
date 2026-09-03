@@ -1,0 +1,145 @@
+name: Release CyberWarrior (signed)
+
+# Manual trigger only — nothing gets released on a plain push or tag.
+# Go to Actions -> Release CyberWarrior (signed) -> Run workflow, enter a
+# version, and this builds, signs, and attaches a Windows Store-ready
+# .appxbundle (plus the raw .exe) to a new GitHub Release.
+#
+# Required repo config:
+#
+#   Variables (Settings -> Secrets and variables -> Actions -> Variables):
+#     APPX_IDENTITY_NAME          e.g. 12345YourAccount.CyberWarrior
+#     APPX_PUBLISHER              e.g. CN=A1B2C3D4-...
+#     APPX_PUBLISHER_DISPLAY_NAME e.g. Your Publisher Name
+#
+#   Secrets (Settings -> Secrets and variables -> Actions -> Secrets):
+#     CSC_LINK          base64-encoded .pfx signing certificate
+#     CSC_KEY_PASSWORD  password for that .pfx
+#
+# Partner Center re-signs on ingestion regardless, so signing here is for
+# your own sideload testing and for distributing the .appxbundle/.exe
+# outside the Store without triggering an "unknown publisher" warning.
+# If CSC_LINK/CSC_KEY_PASSWORD aren't set, this workflow still builds and
+# releases — it just leaves the package unsigned.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into the package (e.g. 1.0.0)."
+        required: true
+        default: "1.0.0"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Npcap SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.13.zip" -OutFile npcap-sdk.zip
+          Expand-Archive npcap-sdk.zip -DestinationPath npcap-sdk
+          echo "LIB=$pwd\npcap-sdk\Lib\x64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build (release)
+        run: cargo build --release --verbose
+
+      - name: Package Windows (.zip)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\CyberWarrior-windows | Out-Null
+          Copy-Item target\release\cyberwarrior.exe dist\CyberWarrior-windows\
+          Copy-Item assets\icon.png dist\CyberWarrior-windows\
+          Compress-Archive -Path dist\CyberWarrior-windows\* -DestinationPath dist\CyberWarrior-windows.zip
+
+      - name: Build .appxbundle (Store package)
+        shell: pwsh
+        env:
+          APPX_IDENTITY_NAME: ${{ vars.APPX_IDENTITY_NAME }}
+          APPX_PUBLISHER: ${{ vars.APPX_PUBLISHER }}
+          APPX_PUBLISHER_DISPLAY_NAME: ${{ vars.APPX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          $identityName = if ($env:APPX_IDENTITY_NAME) { $env:APPX_IDENTITY_NAME } else { "CyberWarrior.Unconfigured" }
+          $publisher = if ($env:APPX_PUBLISHER) { $env:APPX_PUBLISHER } else { "CN=00000000-0000-0000-0000-000000000000" }
+          $publisherDisplay = if ($env:APPX_PUBLISHER_DISPLAY_NAME) { $env:APPX_PUBLISHER_DISPLAY_NAME } else { "Unconfigured Publisher" }
+          if (-not $env:APPX_IDENTITY_NAME) {
+            Write-Host "::warning::APPX_IDENTITY_NAME/APPX_PUBLISHER repo variables aren't set — building with placeholder identity."
+          }
+
+          $stage = "appx-stage"
+          New-Item -ItemType Directory -Force -Path "$stage\Assets" | Out-Null
+          Copy-Item target\release\cyberwarrior.exe "$stage\cyberwarrior.exe"
+
+          magick assets\icon.png -resize 44x44 "$stage\Assets\Square44x44Logo.png"
+          magick assets\icon.png -resize 150x150 "$stage\Assets\Square150x150Logo.png"
+          magick assets\icon.png -resize 50x50 "$stage\Assets\StoreLogo.png"
+          magick assets\icon.png -resize 310x310 -background none -gravity center -extent 310x150 "$stage\Assets\Wide310x150Logo.png"
+          magick assets\icon.png -resize 300x300 -background "#121214" -gravity center -extent 620x300 "$stage\Assets\SplashScreen.png"
+
+          $version = "${{ github.event.inputs.version }}"
+          (Get-Content packaging\appx\AppxManifest.xml.template) `
+            -replace '__IDENTITY_NAME__', $identityName `
+            -replace '__PUBLISHER__', $publisher `
+            -replace '__PUBLISHER_DISPLAY_NAME__', $publisherDisplay `
+            -replace '__VERSION__', $version `
+            | Set-Content "$stage\AppxManifest.xml"
+
+          $sdkBin = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object Name -Descending | Select-Object -First 1
+          $makeappx = Join-Path $sdkBin.FullName "x64\makeappx.exe"
+          echo "SDK_BIN=$($sdkBin.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & $makeappx pack /d $stage /p dist\CyberWarrior-x64.appx /o
+
+          $bundleStage = "appx-bundle-stage"
+          New-Item -ItemType Directory -Force -Path $bundleStage | Out-Null
+          Copy-Item dist\CyberWarrior-x64.appx $bundleStage\
+          & $makeappx bundle /d $bundleStage /p dist\CyberWarrior.appxbundle /o
+
+      - name: Sign package
+        if: ${{ secrets.CSC_LINK != '' }}
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          $pfxPath = "$env:RUNNER_TEMP\signing-cert.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CSC_LINK))
+
+          $signtool = Join-Path $env:SDK_BIN "x64\signtool.exe"
+          & $signtool sign /fd SHA256 /a /f $pfxPath /p $env:CSC_KEY_PASSWORD dist\CyberWarrior.appxbundle
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::signtool failed — check that CSC_LINK/CSC_KEY_PASSWORD are correct and that the cert's Subject matches APPX_PUBLISHER exactly."
+            exit 1
+          }
+
+          Remove-Item $pfxPath -Force
+        # Note: signtool's Subject on the cert must exactly match
+        # APPX_PUBLISHER (Identity Publisher) above, or this step fails.
+
+      - name: Skip signing (no cert configured)
+        if: ${{ secrets.CSC_LINK == '' }}
+        run: echo "::warning::CSC_LINK not set — releasing an UNSIGNED .appxbundle. Fine for Partner Center upload, not for direct sideload distribution."
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: CyberWarrior v${{ github.event.inputs.version }}
+          files: |
+            dist/CyberWarrior-windows.zip
+            dist/CyberWarrior.appxbundle

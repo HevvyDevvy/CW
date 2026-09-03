@@ -45,6 +45,7 @@ jobs:
             libpcap-dev \
             libssl-dev \
             pkg-config \
+            libxdo-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
       # --- Windows: pnet (Network Monitor's packet capture) needs the Npcap
