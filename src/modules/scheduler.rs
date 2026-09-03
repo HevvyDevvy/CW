@@ -9,7 +9,7 @@ use std::time::Duration;
 /// Config for the three schedulable scans. Persisted in Settings; a copy of
 /// this also lives in an `Arc<Mutex<_>>` that the background loop reads,
 /// refreshed every time Settings are saved (same pattern as alert_config).
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScheduleConfig {
     pub malware_scan_enabled: bool,
     pub malware_scan_interval_hours: u32,
