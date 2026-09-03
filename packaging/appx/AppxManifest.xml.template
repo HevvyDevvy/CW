@@ -14,14 +14,14 @@
     valid for local sideload testing only, not Store submission.
   -->
   <Identity
-    Name="__IDENTITY_NAME__"
-    Publisher="__PUBLISHER__"
-    Version="__VERSION__.0"
+    Name="TMHP.com.CyberWarrior"
+    Publisher="CN=BB6CF6A1-F89B-484C-85F4-1A7E35694B74"
+    Version="1.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
     <DisplayName>CyberWarrior</DisplayName>
-    <PublisherDisplayName>__PUBLISHER_DISPLAY_NAME__</PublisherDisplayName>
+    <PublisherDisplayName>@TMHP.com</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>Defensive security dashboard: ingest-and-defend firewall, antivirus, vulnerability, and incident-response tooling.</Description>
   </Properties>
