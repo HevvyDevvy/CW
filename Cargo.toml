@@ -44,7 +44,7 @@ printpdf = "0.7"
 csv = "1"
 
 # SMTP email alerts (rustls, no OpenSSL toolchain needed — matches reqwest's setup).
-lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "hello-world", "builder", "rustls-tls"] }
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "rustls-tls"] }
 
 # Networking for the SIEM feed downloader — rustls avoids needing an OpenSSL toolchain installed.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
