@@ -13,7 +13,53 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Whether the packet-capture backend can be used on this machine.
+///
+/// On Windows, pnet talks to Npcap's `Packet.dll`. That DLL is only present if
+/// the user installed Npcap, so the exe is linked with `/DELAYLOAD:Packet.dll`
+/// (see build.rs): without that, Windows refuses to start the app at all and
+/// shows a "Packet.dll was not found" error dialog before any of our code
+/// runs (this is what the Microsoft Store certification testers hit).
+///
+/// Delay-loading means every pnet call must be gated on this check — if the
+/// DLL is missing, the first call into it would raise a fatal exception.
+/// Npcap installs to `System32\Npcap` unless "WinPcap API-compatible mode" was
+/// chosen, so that folder is added to the DLL search path first.
+#[cfg(windows)]
+pub fn capture_backend_available() -> bool {
+    use std::sync::OnceLock;
+
+    extern "system" {
+        fn SetDllDirectoryW(path: *const u16) -> i32;
+        fn LoadLibraryW(name: *const u16) -> *mut std::ffi::c_void;
+    }
+    fn wide(s: &str) -> Vec<u16> {
+        use std::os::windows::ffi::OsStrExt;
+        std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let npcap_dir = wide(&format!("{root}\\System32\\Npcap"));
+        let dll = wide("Packet.dll");
+        // SAFETY: both buffers are NUL-terminated and outlive the calls.
+        unsafe {
+            SetDllDirectoryW(npcap_dir.as_ptr());
+            !LoadLibraryW(dll.as_ptr()).is_null()
+        }
+    })
+}
+
+#[cfg(not(windows))]
+pub fn capture_backend_available() -> bool {
+    true
+}
+
 pub fn list_interface_names() -> Vec<String> {
+    if !capture_backend_available() {
+        return Vec::new();
+    }
     datalink::interfaces()
         .into_iter()
         .filter(|i| i.is_up() && !i.is_loopback())
@@ -37,6 +83,13 @@ pub fn run(
     stop: Arc<AtomicBool>,
     log: SharedLog,
 ) {
+    if !capture_backend_available() {
+        log.alert(
+            "NetworkMonitor",
+            "Npcap is not installed, so packet capture is unavailable. Install it from https://npcap.com/#download and restart CyberWarrior.",
+        );
+        return;
+    }
     let interfaces = datalink::interfaces();
     let interface = match interfaces.into_iter().find(|i| i.name == interface_name) {
         Some(i) => i,
