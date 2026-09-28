@@ -418,11 +418,17 @@ impl eframe::App for CyberWarriorApp {
                 (Tab::Fleet, "🖧 Fleet"),
                 (Tab::Settings, "⚙ Settings"),
             ];
-            for (tab, label) in tabs {
-                if ui.selectable_label(self.tab == tab, label).clicked() {
-                    self.tab = tab;
+            // Justified layout makes every row span the full sidebar width.
+            // Without it a selectable_label is only as wide as its text, so
+            // short labels (Fleet, Trends, Settings, Firewall, Antivirus) had
+            // a tiny hit area and clicks on the empty part of the row did nothing.
+            ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                for (tab, label) in tabs {
+                    if ui.selectable_label(self.tab == tab, label).clicked() {
+                        self.tab = tab;
+                    }
                 }
-            }
+            });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
@@ -999,6 +1005,17 @@ impl CyberWarriorApp {
     }
 
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
+        // The form is taller than most windows (and grows when the email /
+        // webhook fields appear), so without scrolling the Save button can end
+        // up clipped off-screen and unreachable.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.settings_tab_body(ui);
+            });
+    }
+
+    fn settings_tab_body(&mut self, ui: &mut egui::Ui) {
         ui.heading("Settings");
         ui.add_space(6.0);
 
